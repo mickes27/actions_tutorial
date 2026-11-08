@@ -10,7 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LLVM_VERSION: 22
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
 
 jobs:
@@ -32,28 +31,20 @@ jobs:
             cxx: g++-15
             triplet: x64-linux
 
-          # Same setup as your local build: Clang + libstdc++, plain triplet.
-          - name: Linux / Clang (libstdc++)
+          # Clang + libstdc++ (your local setup). GCC 15 is installed too,
+          # so Clang finds libstdc++ 15 headers for `import std`.
+          - name: Linux / Clang
             os: ubuntu-24.04
             compiler: clang
-            cc: clang-22
-            cxx: clang++-22
+            setup_compiler: llvm-22
+            cc: clang
+            cxx: clang++
             triplet: x64-linux
-
-          # Fallback if Clang + libstdc++ can't do `import std` in CI.
-          # Needs the two files from the notes below.
-          - name: Linux / Clang (libc++)
-            os: ubuntu-24.04
-            compiler: clang
-            libcxx: true
-            cc: clang-22
-            cxx: clang++-22
-            triplet: x64-linux-libcxx
-            experimental: true
 
           - name: Windows / MSVC
             os: windows-2025
             compiler: msvc
+            setup_compiler: msvc
             cc: cl
             cxx: cl
             triplet: x64-windows
@@ -61,6 +52,7 @@ jobs:
           - name: Windows / Clang (clang-cl)
             os: windows-2025
             compiler: clang-cl
+            setup_compiler: llvm-22
             cc: clang-cl
             cxx: clang-cl
             triplet: x64-windows
@@ -69,36 +61,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pin this (e.g. cmakeVersion: "~4.5.0") once it works, for reproducibility.
-      - uses: lukka/get-cmake@latest
-
-      # ---------- Linux toolchains ----------
-      - name: Install GCC 15
-        if: matrix.compiler == 'gcc' || matrix.compiler == 'clang'
-        run: |
-          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          sudo apt-get update
-          sudo apt-get install -y gcc-15 g++-15
-
-      - name: Install Clang
-        if: matrix.compiler == 'clang'
-        run: |
-          wget -q https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh ${LLVM_VERSION}
-          sudo apt-get install -y clang-tools-${LLVM_VERSION}
-          if [[ "${{ matrix.libcxx }}" == "true" ]]; then
-            sudo apt-get install -y libc++-${LLVM_VERSION}-dev libc++abi-${LLVM_VERSION}-dev
-          fi
-
-      # ---------- Windows toolchain env ----------
-      - name: MSVC dev environment
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+      # GCC 15 on Linux: needed by the GCC job, and by the Clang job
+      # for its libstdc++ headers.
+      - name: Setup GCC 15
+        if: runner.os == 'Linux'
+        uses: aminya/setup-cpp@v1
         with:
-          arch: x64
+          compiler: gcc-15
+          cmake: true
+          ninja: true
 
-      # ---------- vcpkg ----------
+      - name: Setup compiler
+        if: matrix.compiler != 'gcc'
+        uses: aminya/setup-cpp@v1
+        with:
+          compiler: ${{ matrix.setup_compiler }}
+          vcvarsall: ${{ runner.os == 'Windows' }}
+          cmake: true
+          ninja: true
+
       - name: vcpkg binary cache
         uses: actions/cache@v4
         with:
@@ -110,31 +91,18 @@ jobs:
       - name: Prepare vcpkg cache dir
         run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 
-      # ---------- Configure / build / test ----------
       - name: Configure
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
         run: |
-          EXTRA=()
-          if [[ "${{ matrix.libcxx }}" == "true" ]]; then
-            EXTRA+=(
-              -DCMAKE_CXX_FLAGS=-stdlib=libc++
-              -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++
-              -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++
-              -DVCPKG_OVERLAY_TRIPLETS="$GITHUB_WORKSPACE/cmake/triplets"
-            )
-          fi
-
           VCPKG_ROOT_FWD="${VCPKG_INSTALLATION_ROOT//\\//}"
-
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=23 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT_FWD/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
-            "${EXTRA[@]}"
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
 
       - name: Build
         run: cmake --build build --parallel
@@ -148,6 +116,5 @@ jobs:
         with:
           name: vcpkg-logs-${{ strategy.job-index }}
           path: |
-            build/vcpkg_installed/vcpkg/issue_body.md
             build/vcpkg-manifest-install.log
           if-no-files-found: ignore
