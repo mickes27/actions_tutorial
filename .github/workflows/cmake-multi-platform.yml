@@ -68,8 +68,6 @@ jobs:
         uses: aminya/setup-cpp@v1
         with:
           compiler: gcc-15
-          cmake: true
-          ninja: true
 
       - name: Setup compiler
         if: matrix.compiler != 'gcc'
@@ -77,8 +75,19 @@ jobs:
         with:
           compiler: ${{ matrix.setup_compiler }}
           vcvarsall: ${{ runner.os == 'Windows' }}
-          cmake: true
-          ninja: true
+
+      # After setup-cpp, so this CMake comes first on PATH.
+      # Fallback if 4.5 isn't found: python -m pip install "cmake~=4.5.0" ninja
+      - name: Setup CMake + Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~4.5.0"
+
+      - name: Check tool versions
+        run: |
+          cmake --version
+          ninja --version
+          "${{ matrix.cxx }}" --version || true
 
       - name: vcpkg binary cache
         uses: actions/cache@v4
@@ -115,6 +124,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vcpkg-logs-${{ strategy.job-index }}
-          path: |
-            build/vcpkg-manifest-install.log
+          path: build/vcpkg-manifest-install.log
           if-no-files-found: ignore
