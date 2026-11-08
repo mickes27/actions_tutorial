@@ -81,7 +81,7 @@ jobs:
       - name: Setup CMake + Ninja
         uses: lukka/get-cmake@latest
         with:
-          cmakeVersion: "~4.5.0"
+          cmakeVersion: "4.5.0-rc3"
 
       - name: Check tool versions
         run: |
